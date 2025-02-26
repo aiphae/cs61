@@ -161,8 +161,8 @@ int io61_flush(io61_file* f) {
         return 0;
     }
     size_t to_write = f->current_byte - f->first_byte;
-    if (to_write > BUFFER_SIZE) { // Safety check
-        return -1; // Should never happen with proper io61_write logic
+    if (to_write > BUFFER_SIZE) {
+        return -1;
     }
     size_t total_written = 0;
     while (total_written < to_write) {
@@ -173,8 +173,8 @@ int io61_flush(io61_file* f) {
         if (nw <= 0) return -1;
         total_written += nw;
     }
-    f->first_byte = 0;  // Reset explicitly
-    f->current_byte = 0; // Reset explicitly
+    f->first_byte = 0;
+    f->current_byte = 0;
     return 0;
 }
 
