@@ -9,13 +9,10 @@
 #undef exit
 #define exit __DO_NOT_CALL_EXIT__READ_PROBLEM_SET_DESCRIPTION__
 
-
-// struct command
-//    Data structure describing a command. Add your own stuff.
-
+// Data structure describing a command. Add your own stuff.
 struct command {
     std::vector<std::string> args;
-    pid_t pid = -1;      // process ID running this command, -1 if none
+    pid_t pid = -1; // process ID running this command, -1 if none
 
     command();
     ~command();
@@ -23,80 +20,86 @@ struct command {
     void run();
 };
 
-
-// command::command()
-//    This constructor function initializes a `command` structure. You may
-//    add stuff to it as you grow the command structure.
-
+// This constructor function initializes a `command` structure. You may
+// add stuff to it as you grow the command structure.
 command::command() {
 }
 
-
-// command::~command()
-//    This destructor function is called to delete a command.
-
+// This destructor function is called to delete a command.
 command::~command() {
 }
 
-
 // COMMAND EXECUTION
 
-// command::run()
-//    Creates a single child process running the command in `this`, and
-//    sets `this->pid` to the pid of the child process.
+// Creates a single child process running the command in `this`, and
+// sets `this->pid` to the pid of the child process.
 //
-//    If a child process cannot be created, this function should call
-//    `_exit(EXIT_FAILURE)` (that is, `_exit(1)`) to exit the containing
-//    shell or subshell. If this function returns to its caller,
-//    `this->pid > 0` must always hold.
+// If a child process cannot be created, this function should call
+// `_exit(EXIT_FAILURE)` (that is, `_exit(1)`) to exit the containing
+// shell or subshell. If this function returns to its caller,
+// `this->pid > 0` must always hold.
 //
-//    Note that this function must return to its caller *only* in the parent
-//    process. The code that runs in the child process must `execvp` and/or
-//    `_exit`.
+// Note that this function must return to its caller *only* in the parent
+// process. The code that runs in the child process must `execvp` and/or
+// `_exit`.
 //
-//    PHASE 1: Fork a child process and run the command using `execvp`.
-//       This will require creating a vector of `char*` arguments using
-//       `this->args[N].c_str()`. Note that the last element of the vector
-//       must be a `nullptr`.
-//    PHASE 4: Set up a pipeline if appropriate. This may require creating a
-//       new pipe (`pipe` system call), and/or replacing the child process's
-//       standard input/output with parts of the pipe (`dup2` and `close`).
-//       Draw pictures!
-//    PHASE 7: Handle redirections.
-
+// PHASE 1: Fork a child process and run the command using `execvp`.
+//    This will require creating a vector of `char*` arguments using
+//    `this->args[N].c_str()`. Note that the last element of the vector
+//    must be a `nullptr`.
+// PHASE 4: Set up a pipeline if appropriate. This may require creating a
+//    new pipe (`pipe` system call), and/or replacing the child process's
+//    standard input/output with parts of the pipe (`dup2` and `close`).
+//    Draw pictures!
+// PHASE 7: Handle redirections.
 void command::run() {
     assert(this->pid == -1);
     assert(this->args.size() > 0);
-    // Your code here!
 
-    fprintf(stderr, "command::run not done yet\n");
+    pid_t child_pid = fork();
+    if (child_pid == 0) {
+        // Child process
+        int args_size = this->args.size();
+        std::vector<char *> arguments(args_size + 1);
+        for (int i = 0; i < args_size; ++i) {
+            arguments[i] = const_cast<char *>(this->args[i].c_str());
+        }
+        arguments[args_size] = nullptr;
+
+        execvp(arguments[0], arguments.data());
+
+        perror("execvp");
+        _exit(EXIT_FAILURE);
+    } else if (child_pid > 0) {
+        this->pid = child_pid;
+    } else {
+        perror("fork");
+        _exit(EXIT_FAILURE);
+    }
 }
 
-
-// run_list(c)
-//    Run the command *list* contained in `section`.
+// Run the command *list* contained in `section`.
 //
-//    PHASE 1: Use `waitpid` to wait for the command started by `c->run()`
-//        to finish.
+// PHASE 1: Use `waitpid` to wait for the command started by `c->run()`
+//    to finish.
 //
-//    The remaining phases may require that you introduce helper functions
-//    (e.g., to process a pipeline), write code in `command::run`, and/or
-//    change `struct command`.
+// The remaining phases may require that you introduce helper functions
+// (e.g., to process a pipeline), write code in `command::run`, and/or
+// change `struct command`.
 //
-//    It is possible, and not too ugly, to handle lists, conditionals,
-//    *and* pipelines entirely within `run_list`, but in general it is clearer
-//    to introduce `run_conditional` and `run_pipeline` functions that
-//    are called by `run_list`. It’s up to you.
+// It is possible, and not too ugly, to handle lists, conditionals,
+// *and* pipelines entirely within `run_list`, but in general it is clearer
+// to introduce `run_conditional` and `run_pipeline` functions that
+// are called by `run_list`. It’s up to you.
 //
-//    PHASE 2: Introduce a loop to run a list of commands, waiting for each
-//       to finish before going on to the next.
-//    PHASE 3: Change the loop to handle conditional chains.
-//    PHASE 4: Change the loop to handle pipelines. Start all processes in
-//       the pipeline in parallel. The status of a pipeline is the status of
-//       its LAST command.
-//    PHASE 5: Change the loop to handle background conditional chains.
-//       This may require adding another call to `fork()`!
-
+// PHASE 2: Introduce a loop to run a list of commands, waiting for each
+//    to finish before going on to the next.
+// PHASE 3: Change the loop to handle conditional chains.
+// PHASE 4: Change the loop to handle pipelines. Start all processes in
+//    the pipeline in parallel. The status of a pipeline is the status of
+//    its LAST command.
+// PHASE 5: Change the loop to handle background conditional chains.
+//    This may require adding another call to `fork()`!
 void run_list(shell_parser sec) {
     command* c = new command;
     auto tok = sec.first_token();
@@ -104,10 +107,15 @@ void run_list(shell_parser sec) {
         c->args.push_back(tok.str());
         tok.next();
     }
+
     c->run();
+
+    int status;
+    pid_t exited_pid = waitpid(c->pid, &status, 0);
+    assert(exited_pid = c->pid);
+
     delete c;
 }
-
 
 int main(int argc, char* argv[]) {
     FILE* command_file = stdin;
@@ -128,9 +136,9 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // - Put the shell into the foreground
-    // - Ignore the SIGTTOU signal, which is sent when the shell is put back
-    //   into the foreground
+    // Put the shell into the foreground
+    // Ignore the SIGTTOU signal, which is sent when the shell is put back
+    // into the foreground
     claim_foreground(0);
     set_signal_handler(SIGTTOU, SIG_IGN);
 
