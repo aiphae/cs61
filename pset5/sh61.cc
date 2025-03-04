@@ -4,15 +4,21 @@
 #include <vector>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <iostream>
 
 // For the love of God
 #undef exit
 #define exit __DO_NOT_CALL_EXIT__READ_PROBLEM_SET_DESCRIPTION__
 
+enum exit_status {TRUE, FALSE, NONE};
+
 // Data structure describing a command. Add your own stuff.
 struct command {
     std::vector<std::string> args;
-    pid_t pid = -1; // process ID running this command, -1 if none
+    // Process ID running this command, -1 if none
+    pid_t pid = -1;
+    // Exit status of the command
+    exit_status status = NONE;
 
     command();
     ~command();
@@ -43,10 +49,6 @@ command::~command() {
 // process. The code that runs in the child process must `execvp` and/or
 // `_exit`.
 //
-// PHASE 1: Fork a child process and run the command using `execvp`.
-//    This will require creating a vector of `char*` arguments using
-//    `this->args[N].c_str()`. Note that the last element of the vector
-//    must be a `nullptr`.
 // PHASE 4: Set up a pipeline if appropriate. This may require creating a
 //    new pipe (`pipe` system call), and/or replacing the child process's
 //    standard input/output with parts of the pipe (`dup2` and `close`).
@@ -65,23 +67,27 @@ void command::run() {
             arguments[i] = const_cast<char *>(this->args[i].c_str());
         }
         arguments[args_size] = nullptr;
-
         execvp(arguments[0], arguments.data());
-
         perror("execvp");
         _exit(EXIT_FAILURE);
     } else if (child_pid > 0) {
+        // Parent process
         this->pid = child_pid;
+        int status;
+        waitpid(this->pid, &status, 0);
+        if (WIFEXITED(status)) {
+            this->status = (WEXITSTATUS(status) == 0) ? TRUE : FALSE;
+        } else {
+            this->status = FALSE;
+        }
     } else {
+        // Failed to fork
         perror("fork");
         _exit(EXIT_FAILURE);
     }
 }
 
 // Run the command *list* contained in `section`.
-//
-// PHASE 1: Use `waitpid` to wait for the command started by `c->run()`
-//    to finish.
 //
 // The remaining phases may require that you introduce helper functions
 // (e.g., to process a pipeline), write code in `command::run`, and/or
@@ -101,20 +107,37 @@ void command::run() {
 // PHASE 5: Change the loop to handle background conditional chains.
 //    This may require adding another call to `fork()`!
 void run_list(shell_parser sec) {
-    command* c = new command;
-    auto tok = sec.first_token();
-    while (tok) {
-        c->args.push_back(tok.str());
-        tok.next();
+    bool to_run = true;
+    exit_status chain_status = NONE;
+
+    while (sec) {
+        // Commands
+        for (auto cpar = sec.first_command(); cpar; cpar.next_command()) {
+            command *cmd = new command();
+            for (auto tok = cpar.first_token(); tok; tok.next()) {
+                cmd->args.push_back(tok.str());
+            }
+
+            if (to_run) {
+                cmd->run();
+                chain_status = cmd->status;
+            } else {
+                cmd->status = chain_status;
+            }
+
+            if (cpar.op() == TYPE_SEQUENCE) {
+                to_run = true;
+            } else if (cpar.op() == TYPE_AND) {
+                to_run = (chain_status == TRUE);
+            } else if (cpar.op() == TYPE_OR) {
+                to_run = (chain_status == FALSE);
+            }
+
+            delete cmd;
+        }
+
+        sec.next_conditional();
     }
-
-    c->run();
-
-    int status;
-    pid_t exited_pid = waitpid(c->pid, &status, 0);
-    assert(exited_pid = c->pid);
-
-    delete c;
 }
 
 int main(int argc, char* argv[]) {
