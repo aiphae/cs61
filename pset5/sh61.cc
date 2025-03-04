@@ -98,9 +98,6 @@ void command::run() {
 // to introduce `run_conditional` and `run_pipeline` functions that
 // are called by `run_list`. It’s up to you.
 //
-// PHASE 2: Introduce a loop to run a list of commands, waiting for each
-//    to finish before going on to the next.
-// PHASE 3: Change the loop to handle conditional chains.
 // PHASE 4: Change the loop to handle pipelines. Start all processes in
 //    the pipeline in parallel. The status of a pipeline is the status of
 //    its LAST command.
@@ -111,7 +108,6 @@ void run_list(shell_parser sec) {
     exit_status chain_status = NONE;
 
     while (sec) {
-        // Commands
         for (auto cpar = sec.first_command(); cpar; cpar.next_command()) {
             command *cmd = new command();
             for (auto tok = cpar.first_token(); tok; tok.next()) {
@@ -121,8 +117,6 @@ void run_list(shell_parser sec) {
             if (to_run) {
                 cmd->run();
                 chain_status = cmd->status;
-            } else {
-                cmd->status = chain_status;
             }
 
             if (cpar.op() == TYPE_SEQUENCE) {
