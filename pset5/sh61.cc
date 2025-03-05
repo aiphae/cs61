@@ -5,12 +5,13 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <iostream>
+#include <memory>
 
 // For the love of God
 #undef exit
 #define exit __DO_NOT_CALL_EXIT__READ_PROBLEM_SET_DESCRIPTION__
 
-enum exit_status {TRUE, FALSE, NONE};
+enum exit_status {TRUE, FALSE};
 
 // Data structure describing a command. Add your own stuff.
 struct command {
@@ -18,12 +19,15 @@ struct command {
     // Process ID running this command, -1 if none
     pid_t pid = -1;
     // Exit status of the command
-    exit_status status = NONE;
+    exit_status status;
+
+    int pfd[2] = {-1, -1};
+    command *next = nullptr;
 
     command();
     ~command();
 
-    void run();
+    void run(command *prev);
 };
 
 // This constructor function initializes a `command` structure. You may
@@ -33,6 +37,8 @@ command::command() {
 
 // This destructor function is called to delete a command.
 command::~command() {
+    if (pfd[0] != -1) close(pfd[0]);
+    if (pfd[1] != -1) close(pfd[1]);
 }
 
 // COMMAND EXECUTION
@@ -54,13 +60,31 @@ command::~command() {
 //    standard input/output with parts of the pipe (`dup2` and `close`).
 //    Draw pictures!
 // PHASE 7: Handle redirections.
-void command::run() {
+void command::run(command *prev) {
     assert(this->pid == -1);
     assert(this->args.size() > 0);
+
+    if (this->next) {
+        if (pipe(this->pfd) == -1) {
+            perror("pipe");
+            _exit(EXIT_FAILURE);
+        }
+    }
 
     pid_t child_pid = fork();
     if (child_pid == 0) {
         // Child process
+        if (prev && prev->pfd[0] != -1) {
+            dup2(prev->pfd[0], STDIN_FILENO);
+            close(prev->pfd[0]);
+            close(prev->pfd[1]);
+        }
+        if (this->next && this->pfd[1] != -1) {
+            dup2(this->pfd[1], STDOUT_FILENO);
+            close(this->pfd[0]);
+            close(this->pfd[1]);
+        }
+
         int args_size = this->args.size();
         std::vector<char *> arguments(args_size + 1);
         for (int i = 0; i < args_size; ++i) {
@@ -73,12 +97,11 @@ void command::run() {
     } else if (child_pid > 0) {
         // Parent process
         this->pid = child_pid;
-        int status;
-        waitpid(this->pid, &status, 0);
-        if (WIFEXITED(status)) {
-            this->status = (WEXITSTATUS(status) == 0) ? TRUE : FALSE;
-        } else {
-            this->status = FALSE;
+        if (prev && prev->pfd[1] != -1) {
+            close(prev->pfd[1]);
+        }
+        if (this->next && next->pfd[0] != -1) {
+            close(this->pfd[0]);
         }
     } else {
         // Failed to fork
@@ -98,38 +121,56 @@ void command::run() {
 // to introduce `run_conditional` and `run_pipeline` functions that
 // are called by `run_list`. It’s up to you.
 //
-// PHASE 4: Change the loop to handle pipelines. Start all processes in
-//    the pipeline in parallel. The status of a pipeline is the status of
-//    its LAST command.
 // PHASE 5: Change the loop to handle background conditional chains.
 //    This may require adding another call to `fork()`!
 void run_list(shell_parser sec) {
     bool to_run = true;
-    exit_status chain_status = NONE;
+    exit_status chain_status;
 
     while (sec) {
-        for (auto cpar = sec.first_command(); cpar; cpar.next_command()) {
-            command *cmd = new command();
-            for (auto tok = cpar.first_token(); tok; tok.next()) {
-                cmd->args.push_back(tok.str());
+        std::vector<command *> pipeline;
+        for (auto ppar = sec.first_pipeline(); ppar; ppar.next_pipeline()) {
+            for (auto cpar = ppar.first_command(); cpar; cpar.next_command()) {
+                command *cmd = new command();
+                for (auto tok = cpar.first_token(); tok; tok.next()) {
+                    cmd->args.push_back(tok.str());
+                }
+                pipeline.push_back(cmd);
+                if (pipeline.size() > 1) {
+                    pipeline[pipeline.size() - 2]->next = cmd;
+                }
             }
 
             if (to_run) {
-                cmd->run();
-                chain_status = cmd->status;
+                command *prev = nullptr;
+                for (auto cmd: pipeline) {
+                    cmd->run(prev);
+                    prev = cmd;
+                }
+
+                int status;
+                waitpid(pipeline.back()->pid, &status, 0);
+                if (WIFEXITED(status)) {
+                    chain_status = (WEXITSTATUS(status) == 0) ? TRUE : FALSE;
+                } else {
+                    chain_status = FALSE;
+                }
             }
 
-            if (cpar.op() == TYPE_SEQUENCE) {
+            if (ppar.op() == TYPE_SEQUENCE) {
                 to_run = true;
-            } else if (cpar.op() == TYPE_AND) {
+            } else if (ppar.op() == TYPE_AND) {
                 to_run = (chain_status == TRUE);
-            } else if (cpar.op() == TYPE_OR) {
+            } else if (ppar.op() == TYPE_OR) {
                 to_run = (chain_status == FALSE);
             }
 
-            delete cmd;
-        }
+            for (auto cmd: pipeline) {
+                delete cmd;
+            }
 
+            pipeline.clear();
+        }
         sec.next_conditional();
     }
 }
