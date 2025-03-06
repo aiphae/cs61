@@ -86,6 +86,18 @@ void command::run(command *prev) {
         }
     }
 
+    if (args[0] == "cd") {
+        if (args.size() != 2) {
+            this->status = FALSE;
+        } else if (chdir(args[1].c_str()) == -1) {
+            this->status = FALSE;
+        } else {
+            this->status = TRUE;
+        }
+        this->pid = 0;
+        return;
+    }
+
     pid_t child_pid = fork();
     if (child_pid == 0) {
         // Child process
@@ -166,17 +178,23 @@ void fill_pipeline(shell_parser &parser, std::vector<command *> &pipeline) {
 
 int run_pipeline(std::vector<command *> &pipeline) {
     command *prev = nullptr;
-    for (auto cmd: pipeline) {
+    for (auto cmd : pipeline) {
         cmd->run(prev);
         prev = cmd;
     }
-
-    int status;
-    waitpid(pipeline.back()->pid, &status, 0);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    int status = 0;
+    command *last_cmd = pipeline.back();
+    if (last_cmd->pid > 0) {
+        waitpid(last_cmd->pid, &status, 0);
+        return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    } else if (last_cmd->pid == 0) {
+        return (last_cmd->status == TRUE) ? 0 : 1;
+    }
+    return -1;
 }
 
-void run_conditional(shell_parser &conditional) {
+void run_conditional(shell_parser &conditional, bool unused) {
+    (void) unused;
     bool to_run = true;
     exit_status chain_status;
 
@@ -197,27 +215,26 @@ void run_conditional(shell_parser &conditional) {
             to_run = (chain_status == FALSE);
         }
 
-        for (auto cmd: pipeline_commands) {
+        for (auto cmd : pipeline_commands) {
             delete cmd;
         }
-
         pipeline_commands.clear();
     }
 }
 
-// Run the command *list* contained in `section`.
 void run_list(shell_parser sec) {
     for (auto conditional = sec.first_conditional(); conditional; conditional.next_conditional()) {
         if (conditional.op() == TYPE_BACKGROUND) {
             pid_t child_pid = fork();
             if (child_pid == 0) {
-                run_conditional(conditional);
+                run_conditional(conditional, false);
                 _exit(0);
+            } else if (child_pid < 0) {
+                perror("fork");
             }
-            waitpid(child_pid, 0, 0);
-            continue;
+        } else {
+            run_conditional(conditional, false);
         }
-        run_conditional(conditional);
     }
 }
 
@@ -280,9 +297,14 @@ int main(int argc, char* argv[]) {
             needprompt = 1;
         }
 
-        // Handle zombie processes and/or interrupt requests
-        // Your code here!
+        pid_t pid;
+        while ((pid = waitpid(-1, nullptr, WNOHANG)) > 0) {}
+        if (pid == -1 && errno != ECHILD) {
+            perror("waitpid");
+        }
     }
+
+    while (waitpid(-1, nullptr, WNOHANG) > 0) {}
 
     return 0;
 }
