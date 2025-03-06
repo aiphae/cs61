@@ -110,68 +110,72 @@ void command::run(command *prev) {
     }
 }
 
-// Run the command *list* contained in `section`.
-//
-// The remaining phases may require that you introduce helper functions
-// (e.g., to process a pipeline), write code in `command::run`, and/or
-// change `struct command`.
-//
-// It is possible, and not too ugly, to handle lists, conditionals,
-// *and* pipelines entirely within `run_list`, but in general it is clearer
-// to introduce `run_conditional` and `run_pipeline` functions that
-// are called by `run_list`. It’s up to you.
-//
-// PHASE 5: Change the loop to handle background conditional chains.
-//    This may require adding another call to `fork()`!
-void run_list(shell_parser sec) {
+void fill_pipeline(shell_parser &parser, std::vector<command *> &pipeline) {
+    for (auto cpar = parser.first_command(); cpar; cpar.next_command()) {
+        command *cmd = new command();
+        for (auto tok = cpar.first_token(); tok; tok.next()) {
+            cmd->args.push_back(tok.str());
+        }
+        pipeline.push_back(cmd);
+        if (pipeline.size() > 1) {
+            pipeline[pipeline.size() - 2]->next = cmd;
+        }
+    }
+}
+
+int run_pipeline(std::vector<command *> &pipeline) {
+    command *prev = nullptr;
+    for (auto cmd: pipeline) {
+        cmd->run(prev);
+        prev = cmd;
+    }
+
+    int status;
+    waitpid(pipeline.back()->pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+void run_conditional(shell_parser &conditional) {
     bool to_run = true;
     exit_status chain_status;
 
-    while (sec) {
-        std::vector<command *> pipeline;
-        for (auto ppar = sec.first_pipeline(); ppar; ppar.next_pipeline()) {
-            for (auto cpar = ppar.first_command(); cpar; cpar.next_command()) {
-                command *cmd = new command();
-                for (auto tok = cpar.first_token(); tok; tok.next()) {
-                    cmd->args.push_back(tok.str());
-                }
-                pipeline.push_back(cmd);
-                if (pipeline.size() > 1) {
-                    pipeline[pipeline.size() - 2]->next = cmd;
-                }
-            }
+    std::vector<command *> pipeline_commands;
+    for (auto pipeline = conditional.first_pipeline(); pipeline; pipeline.next_pipeline()) {
+        fill_pipeline(pipeline, pipeline_commands);
 
-            if (to_run) {
-                command *prev = nullptr;
-                for (auto cmd: pipeline) {
-                    cmd->run(prev);
-                    prev = cmd;
-                }
-
-                int status;
-                waitpid(pipeline.back()->pid, &status, 0);
-                if (WIFEXITED(status)) {
-                    chain_status = (WEXITSTATUS(status) == 0) ? TRUE : FALSE;
-                } else {
-                    chain_status = FALSE;
-                }
-            }
-
-            if (ppar.op() == TYPE_SEQUENCE) {
-                to_run = true;
-            } else if (ppar.op() == TYPE_AND) {
-                to_run = (chain_status == TRUE);
-            } else if (ppar.op() == TYPE_OR) {
-                to_run = (chain_status == FALSE);
-            }
-
-            for (auto cmd: pipeline) {
-                delete cmd;
-            }
-
-            pipeline.clear();
+        if (to_run) {
+            int status = run_pipeline(pipeline_commands);
+            chain_status = (status == 0) ? TRUE : FALSE;
         }
-        sec.next_conditional();
+
+        if (pipeline.op() == TYPE_SEQUENCE) {
+            to_run = true;
+        } else if (pipeline.op() == TYPE_AND) {
+            to_run = (chain_status == TRUE);
+        } else if (pipeline.op() == TYPE_OR) {
+            to_run = (chain_status == FALSE);
+        }
+
+        for (auto cmd: pipeline_commands) {
+            delete cmd;
+        }
+
+        pipeline_commands.clear();
+    }
+}
+
+// Run the command *list* contained in `section`.
+void run_list(shell_parser sec) {
+    for (auto conditional = sec.first_conditional(); conditional; conditional.next_conditional()) {
+        if (conditional.op() == TYPE_BACKGROUND) {
+            pid_t child_pid = fork();
+            if (child_pid == 0) {
+                run_conditional(conditional);
+                _exit(0);
+            }
+            continue;
+        }
+        run_conditional(conditional);
     }
 }
 
