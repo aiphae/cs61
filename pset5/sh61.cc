@@ -4,35 +4,58 @@
 #include <vector>
 #include <sys/stat.h>
 #include <sys/wait.h>
-#include <iostream>
-#include <memory>
 
 // For the love of God
 #undef exit
 #define exit __DO_NOT_CALL_EXIT__READ_PROBLEM_SET_DESCRIPTION__
 
+// Represents the exit status of a command
 enum exit_status {TRUE, FALSE};
+enum redirection_type {READ, WRITE, ERROR};
 
 // Data structure describing a command. Add your own stuff.
 struct command {
-    std::vector<std::string> args;
-    // Process ID running this command, -1 if none
-    pid_t pid = -1;
-    // Exit status of the command
-    exit_status status;
-
-    int pfd[2] = {-1, -1};
-    command *next = nullptr;
-
-    command();
+    command(shell_tokenizer tok);
     ~command();
 
     void run(command *prev);
+
+    std::vector<std::string> args;
+    pid_t pid = -1; // Process ID running this command, -1 if none
+    exit_status status; // Exit status of the command
+
+    std::string input_filename;
+    std::string output_filename;
+    std::string error_filename;
+
+    int pfd[2] = {-1, -1}; // Pipe file descriptors
+    command *next = nullptr; // Next command in a pipe, nullptr if none
 };
 
-// This constructor function initializes a `command` structure. You may
-// add stuff to it as you grow the command structure.
-command::command() {
+// This constructor function initializes a `command` structure.
+command::command(shell_tokenizer tok) {
+    for (; tok; tok.next()) {
+        if (tok.type() == TYPE_REDIRECT_OP) {
+            redirection_type redirection;
+            if (tok.str() == "<") {
+                redirection = READ;
+            } else if (tok.str() == ">") {
+                redirection = WRITE;
+            } else {
+                redirection = ERROR;
+            }
+            tok.next();
+            if (redirection == READ) {
+                input_filename = tok.str();
+            } else if (redirection == WRITE) {
+                output_filename = tok.str();
+            } else {
+                error_filename = tok.str();
+            }
+            continue;
+        }
+        args.push_back(tok.str());
+    }
 }
 
 // This destructor function is called to delete a command.
@@ -40,8 +63,6 @@ command::~command() {
     if (pfd[0] != -1) close(pfd[0]);
     if (pfd[1] != -1) close(pfd[1]);
 }
-
-// COMMAND EXECUTION
 
 // Creates a single child process running the command in `this`, and
 // sets `this->pid` to the pid of the child process.
@@ -54,12 +75,6 @@ command::~command() {
 // Note that this function must return to its caller *only* in the parent
 // process. The code that runs in the child process must `execvp` and/or
 // `_exit`.
-//
-// PHASE 4: Set up a pipeline if appropriate. This may require creating a
-//    new pipe (`pipe` system call), and/or replacing the child process's
-//    standard input/output with parts of the pipe (`dup2` and `close`).
-//    Draw pictures!
-// PHASE 7: Handle redirections.
 void command::run(command *prev) {
     assert(this->pid == -1);
     assert(this->args.size() > 0);
@@ -74,7 +89,35 @@ void command::run(command *prev) {
     pid_t child_pid = fork();
     if (child_pid == 0) {
         // Child process
-        if (prev && prev->pfd[0] != -1) {
+        if (!input_filename.empty()) {
+            int fd = open(input_filename.c_str(), O_RDONLY);
+            if (fd == -1) {
+                perror(input_filename.c_str());
+                _exit(EXIT_FAILURE);
+            }
+            dup2(fd, STDIN_FILENO);
+            close(fd);
+        }
+        if (!output_filename.empty() && !this->next) {
+            int fd = open(output_filename.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            if (fd == -1) {
+                perror(output_filename.c_str());
+                _exit(EXIT_FAILURE);
+            }
+            dup2(fd, STDOUT_FILENO);
+            close(fd);
+        }
+        if (!error_filename.empty()) {
+            int fd = open(error_filename.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            if (fd == -1) {
+                perror(error_filename.c_str());
+                _exit(EXIT_FAILURE);
+            }
+            dup2(fd, STDERR_FILENO);
+            close(fd);
+        }
+
+        if (prev && prev->pfd[0] != -1 && input_filename.empty()) {
             dup2(prev->pfd[0], STDIN_FILENO);
             close(prev->pfd[0]);
             close(prev->pfd[1]);
@@ -91,6 +134,7 @@ void command::run(command *prev) {
             arguments[i] = const_cast<char *>(this->args[i].c_str());
         }
         arguments[args_size] = nullptr;
+
         execvp(arguments[0], arguments.data());
         perror("execvp");
         _exit(EXIT_FAILURE);
@@ -112,10 +156,7 @@ void command::run(command *prev) {
 
 void fill_pipeline(shell_parser &parser, std::vector<command *> &pipeline) {
     for (auto cpar = parser.first_command(); cpar; cpar.next_command()) {
-        command *cmd = new command();
-        for (auto tok = cpar.first_token(); tok; tok.next()) {
-            cmd->args.push_back(tok.str());
-        }
+        command *cmd = new command(cpar.first_token());
         pipeline.push_back(cmd);
         if (pipeline.size() > 1) {
             pipeline[pipeline.size() - 2]->next = cmd;
