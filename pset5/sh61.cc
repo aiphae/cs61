@@ -173,6 +173,7 @@ void run_list(shell_parser sec) {
                 run_conditional(conditional);
                 _exit(0);
             }
+            waitpid(child_pid, 0, 0);
             continue;
         }
         run_conditional(conditional);
