@@ -14,7 +14,6 @@
 #include <deque>
 #include <functional>
 
-
 // breakout board
 pong_board* main_board;
 
@@ -26,13 +25,10 @@ static unsigned long warp_delay = 200'000;
 // number of running threads
 static std::atomic<long> nrunning = 0;
 
-
 // THREADS
 
-// ball_thread(b)
-//    Move a ball until it falls off the board. Then destroy the
-//    ball and exit.
-
+// Move a ball until it falls off the board. Then destroy the
+// ball and exit.
 void ball_thread(pong_ball* b) {
     ++nrunning;
 
@@ -53,51 +49,44 @@ void ball_thread(pong_ball* b) {
     --nrunning;
 }
 
-
-// warp_thread(w)
-//    Handle a warp tunnel. Must behave as follows:
+// Handle a warp tunnel. Must behave as follows:
 //
-//    1. Wait for a ball to enter this tunnel
-//       (see `warp_thread::accept_ball()`).
-//    2. Hide the ball for `warp_delay` microseconds.
-//    3. Reveal the ball at position `warp->x,warp->y` (once that
-//       position is available) and send it on its way.
-//    4. Return to step 1.
+// 1. Wait for a ball to enter this tunnel
+//    (see `warp_thread::accept_ball()`).
+// 2. Hide the ball for `warp_delay` microseconds.
+// 3. Reveal the ball at position `warp->x,warp->y` (once that
+//    position is available) and send it on its way.
+// 4. Return to step 1.
 //
-//    The handout code is not thread-safe. Remove the `usleep(0)` functions
-//    and it doesn’t work at all!
-
+// The handout code is not thread-safe. Remove the `usleep(0)` functions
+// and it doesn’t work at all!
 void warp_thread(pong_warp* w) {
-    pong_cell& cdest = w->board.cell(w->x, w->y);
     while (true) {
-        // wait for a ball to arrive
-        while (!w->ball) {
-            usleep(0);
-        }
+        std::unique_lock<std::mutex> lock(w->queue_mutex);
+        w->queue_cv.wait(lock, [w]() { return !w->balls_queue.empty(); });
 
         // claim ball (move ball to warp tunnel)
-        pong_ball* b = w->ball;
-        w->ball = nullptr;
+        pong_ball* b = w->balls_queue.front();
+        w->balls_queue.pop();
+        lock.unlock();
 
         // ball stays in warp tunnel for `warp_delay` usec
         usleep(warp_delay);
 
-        // then it appears on the destination cell
-        assert(!cdest.ball);
-        cdest.ball = b;
+        std::unique_lock<std::mutex> state_lock(b->state_mutex);
+        std::unique_lock<std::mutex> dest_lock(w->board.cell_mutex[(b->y + 1) * b->board.width + b->x + 1]);
         b->x = w->x;
         b->y = w->y;
-        b->stopped = false;
+        b->stopped = true;
+        b->unwarp = true;
+        b->stopped_cv.notify_all();
     }
 }
 
-
-// paddle_thread(board, x, y, width)
-//    Thread to move the paddle, which starts at position (`px`, `py`) and has
-//    width `pw`.
+// Thread to move the paddle, which starts at position (`px`, `py`) and has
+// width `pw`.
 //
-//    Your code here! Our handout code just moves the paddle back & forth.
-
+// Your code here! Our handout code just moves the paddle back & forth.
 void paddle_thread(pong_board* b, int px, int py, int pw) {
     int dx = 1;
     while (true) {
@@ -126,8 +115,7 @@ void paddle_thread(pong_board* b, int px, int py, int pw) {
 
 static void print_thread(pong_board*, long print_interval);
 
-// usage()
-//    Explain how breakout61 should be run.
+// Explain how breakout61 should be run.
 static void usage() {
     fprintf(stderr, "\
 Usage: ./breakout61 [-P] [-1] [-w WIDTH] [-h HEIGHT] [-b NBALLS] [-s NSTICKY]\n\
@@ -312,13 +300,12 @@ int main(int argc, char** argv) {
 
 // BOARD PRINTING THREAD
 
-// extract_board
-//    Renders the board into an array of characters `buf`, and stores the
-//    number of collisions in `ncollisions`. This is in a separate function
-//    so we can localize unsafe access to `pong_board`.
+// Renders the board into an array of characters `buf`, and stores the
+// number of collisions in `ncollisions`. This is in a separate function
+// so we can localize unsafe access to `pong_board`.
 //
-//    NOTE: This function accesses the board in a thread-unsafe way. There is no
-//    easy way to fix this and you aren't expected to fix it.
+// NOTE: This function accesses the board in a thread-unsafe way. There is no
+// easy way to fix this and you aren't expected to fix it.
 __attribute__((no_sanitize("thread")))
 void extract_board(pong_board& board, unsigned char* buf,
                    unsigned long& ncollisions) {
@@ -349,9 +336,8 @@ void extract_board(pong_board& board, unsigned char* buf,
     }
 }
 
-// print_thread
-//    Prints out the current state of the `board` to standard output every
-//    `print_interval` microseconds.
+// Prints out the current state of the `board` to standard output every
+// `print_interval` microseconds.
 void print_thread(pong_board* board, long print_interval) {
     static const unsigned char obstacle_colors[16] = {
         227, 46, 214, 160, 100, 101, 136, 137,
